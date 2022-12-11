@@ -1,0 +1,38 @@
+
+version: '3'
+networks:
+  pumped_storage_development:
+    driver: bridge
+    ipam:
+        driver: default
+        config:
+            - subnet: 172.19.0.0/24
+services:
+  grafana-charting:
+    image: grafana/grafana-oss
+    container_name: grafana
+    ports:
+      - 3000:3000
+    networks: 
+      pumped_storage_development:
+        ipv4_address: 172.19.0.2
+    user: "1000"
+    volumes:
+      - ~/volumes/grafana-data:/var/lib/grafana
+      - ./grafana.ini:/etc/grafana/grafana.ini
+
+  statistics-db:
+    container_name: ${TIMESCALE_DB_ADDRESS}
+    image: "timescale/timescaledb:latest-pg13"
+    environment:
+      - POSTGRES_USER=${TIMESCALE_DB_USER}
+      - POSTGRES_PASSWORD=${TIMESCALE_DB_PASSWORD}
+      - POSTGRES_DB=${TIMESCALE_DB_NAME}
+    ports:
+      - ${TIMESCALE_DB_PORT}:${TIMESCALE_DB_PORT}
+    networks: 
+      pumped_storage_development:
+        ipv4_address: 172.19.0.3
+    command: postgres -c shared_preload_libraries=timescaledb
+    depends_on:
+      - grafana-charting
