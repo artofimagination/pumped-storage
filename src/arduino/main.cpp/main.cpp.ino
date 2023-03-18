@@ -10,13 +10,14 @@ const int cValveRelayId = 7;
 const int cSolarRelayId = 4;
 const int cGeneratorRelayId = 2;
 
+//! Total number of used analog pins
+const int cAnalogCount = 4;
 // Analog pins
 const int cUpperTankWeightSensorId = A0;
 const int cLowerTankWeightSensorId = A1;
-const int cLoadCurrentSensorId = A2;
-const int cChargeCurrentSensorId = A3;
+const int cCurrentSensorId = A2;
 const int cBatteryVoltageSensorId = A4;
-const int cAnalogCount = 5;
+
 
 // Flow meter consts. To represent 1 liter of flow the number of squarewaves below shall happen.
 const int cDropFlow_WavePerLiter = 450;
@@ -44,50 +45,50 @@ const int cRelayStateOff = 0;
 
 
 // Ambient light sensor constants
-const int cMaxLight_lux = 2000;
-const int cDaylight_lux = 200;
+const int cDaylight_lux = 100;
 
 // Voltage and current conversion constants
-const float c5VConversion = 4.88;
-const float cVRef_mV = 2500.0;
-const float cVSensitivity_mVperA = 2.3; // 136 mV/A resolution
+const float c5VConversion = 1.0;
+const float cVRef_mV = 510.0;
+const float cVSensitivity_mVperA = 11.0; // 136 mV/A resolution
 const float cVBatLow_mV = 3100.0;
 const float cVBatOk_mV = 3900.0;
 
 // Moving average control
-const int cAvgSampleCount = 20;
+const int cAvgSampleCount = 1;
 int gSampleCounter = 0;
 float gAnalogSamples[cAnalogCount][cAvgSampleCount];
 float gSampleAccum[cAnalogCount];
 bool gAvgBufferSaturated = false;
 
 // Networking
-bool gServerReady = false;
 unsigned long gWatchdogCount = 0;
 bool ledON = false;
 
 struct Measurements
 {
-  float ambientLight_lux;
-  float dropFlow_lpmin;
-  float upperTankLevel_l;
-  float lowerTankLevel_l;
-  float loadCurrent_mA;
-  float chargeCurrent_mA;
-  float batteryVoltage_mV;
+  float ambientLight_lux{0.0};
+  float dropFlow_lpmin{0.0};
+  float upperTankLevel_l{0.0};
+  float lowerTankLevel_l{0.0};
+  float current_mA{0.0};
+  float batteryVoltage_mV{0.0};
 };
 
-// Why did 20:47:58.744 -> DNS wiki.dfrobot.com.cn, 111.231.115.214 log come up, shady???
-// DF admin passwd: test_admin_pw_1
+// An interesting observation
+// Sometimes I received the following message. with DF Robot WifiBee module.
+// 20:47:58.744 -> DNS wiki.dfrobot.com.cn, 111.231.115.214 log come up, shady???
+// I believe, that when someone buys a module, whuch purpose is to provide a wifi interface
+// I shouldn't be seeing any DNS identification towards the manufacturer.
 const char ssid[]={
   "AT+SSID=Hogspot2G"};   // WiFi SSID
 const char passwd[]={
-  "AT+PASSWORD=testpwd"}; // WiFi  password
+  "AT+PASSWORD=mortythebooty007"}; // WiFi  password
 
 DFRobot_VEML7700 als;
 
 /*! Initializes the WifiBee-MT7681 module
- *  Currently disabled because of reliability problems.
+ *  Only need to run once to configure the module
  */
 void initWifi()
 {
@@ -98,23 +99,17 @@ void initWifi()
   delay(100);
   Serial.println(passwd);
   delay(100);
-  //Serial.println("AT+DFADMINVERI=DFROBOT_JANSION");
-  //delay(100);
-  //Serial.println("AT+DFADMIN=test_admin_pw_1");
-  //delay(100);
   Serial.println("AT+HOSTNAME=?");
   delay(100);
   Serial.println("AT+REBOOT");
   delay(100);
   Serial.println("AT+CONNECT");
   delay(10000);
-  //Serial.println("AT+EXITAT");
-  //delay(100);
 }
 
 //! Setup arduino control
 void setup() {
-  // Configure PWM frequency
+  // Configure PWM frequency.
   //TCCR0B = 0b00000001; // x1
   //TCCR0A = 0b00000011; // fast pwm
   //TCCR0B = 0b00000010; // x8
@@ -143,6 +138,8 @@ void setup() {
     }
   }
   delay(100);
+
+  // Setup control variables.
   gControl.bottomTankEmptyCounter = 0;
   gControl.topTankEmptyCounter = 0;
   gControl.pumpState = 0;
@@ -156,7 +153,8 @@ void setup() {
   gControl.isManual = 1;
   gControl.isLowVoltageShutdown = 0;
 
-  // Configure Wifi
+  // Using the serial as it seemed to be faster than using DF Robot WifiBee module.
+  //initWifi();
   
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -169,11 +167,6 @@ float GetLightIntensity_lux()
 {
     float lux;
     als.getALSLux(lux);
-    float lux_coeff = (lux / cMaxLight_lux);
-    if (lux_coeff > 1.0)
-    {
-      lux_coeff = 1.0;
-    }
     return lux;
 }
 
@@ -194,9 +187,12 @@ float GetFlow_lpmin(int flowMeterId, int flowConst_WavePerLiter)
     freq = 1000000.0 / period;
   else
     freq = 0;
-  return freq * 60 / flowConst_WavePerLiter;
+  return -freq * 60 / flowConst_WavePerLiter;
 }
 
+/*! Sensor ids are not starting from 0 and are not continuous
+ *  This function will return id-s that meet the above two conditions.
+ */
 int ConvertSensorIdToSampleContainerId(int sensorId)
 {
   switch(sensorId)
@@ -205,15 +201,25 @@ int ConvertSensorIdToSampleContainerId(int sensorId)
           return 0;
       case cLowerTankWeightSensorId:
           return 1;
-      case cLoadCurrentSensorId:
+      case cCurrentSensorId:
           return 2;
-      case cChargeCurrentSensorId:
-          return 3;
       case cBatteryVoltageSensorId:
-          return 4;
+          return 3;
       default:
           return 0;
   }
+}
+
+/*! Updates averager control parameters.
+ */
+void UpdateAverager()
+{
+    gSampleCounter++;
+    if (gSampleCounter == cAvgSampleCount)
+    {
+        gSampleCounter = 0;
+        gAvgBufferSaturated = true;
+    }  
 }
 
 /*! Stores, calculates and returns the moving average of a sensor measurement
@@ -225,11 +231,6 @@ int ConvertSensorIdToSampleContainerId(int sensorId)
 float GetAvgSample(int sensorId, float sample)
 {
     int sampleContainerId = ConvertSensorIdToSampleContainerId(sensorId);
-    if (gSampleCounter == cAvgSampleCount)
-    {
-        gSampleCounter = 0;
-        gAvgBufferSaturated = true;
-    }
     if (gAvgBufferSaturated)
         gSampleAccum[sampleContainerId] -= gAnalogSamples[sampleContainerId][gSampleCounter]; 
     gAnalogSamples[sampleContainerId][gSampleCounter] = sample;
@@ -244,18 +245,29 @@ float GetAvgSample(int sensorId, float sample)
  */
 float GetAvgCurrent_mA(int sensorId)
 {
-    float rawCurrent_mV = analogRead(sensorId) * c5VConversion;
-    rawCurrent_mV = (rawCurrent_mV - cVRef_mV) * cVSensitivity_mVperA;
+    float rawCurrent_mV = analogRead(sensorId);
+    //float rawCurrent_mV = -2.75 * analogRead(sensorId) + 1740.0;
+    rawCurrent_mV = (rawCurrent_mV - cVRef_mV) * cVSensitivity_mVperA ;
     return GetAvgSample(sensorId, rawCurrent_mV);
 }
 
+/*! Returns the tank level of the selected tank in liters.
+ *  The magic numbers are set based on empirical measurements. 
+ *  The force sense resistor is not providing linear behaviour at this weight range,
+ *  so I had to play around until I got the output value roughly corresponding to the reality.
+ *  Need to adjust everytime the setup is being moved.
+ *  \param[in] tankId The id of the selected tank (top, bottom tank)
+ *  
+ *  \return the average tank level in liters.
+*/
 float GetTankLevel_l(int tankId)
 {
     float data = 0.0;
     if (tankId == cLowerTankWeightSensorId)
-      data = 0.01*(analogRead(tankId)-135);
+      data = 0.0225*(analogRead(tankId)- 352);
     else
-      data = 0.01*(analogRead(tankId)-420);
+      data = 0.0225*(analogRead(tankId)- 460);
+    // the measurement is a bit inaccurate, so every negative value is just truncated to zero.
     return GetAvgSample(tankId, data <= 0.0 ? 0.0 : data);
 }
 
@@ -267,9 +279,8 @@ float GetBatteryVoltage_mV()
 
 void CheckWatchdog()
 {
-    if (gWatchdogCount > 1500000)
+    if (gWatchdogCount > 4000)
     {
-      gServerReady = false;
       gWatchdogCount = 0;
       Serial.write("$ARDY,*");
       if (ledON)
@@ -286,6 +297,8 @@ void CheckWatchdog()
     gWatchdogCount++;
 }
 
+
+//! Sends control states to the desktop client.
 void SendControlFeedback()
 {
     String resp = "$ACTL,";
@@ -308,19 +321,19 @@ void SendControlFeedback()
     Serial.write(resp.c_str());
 }
 
+/*! Processes incoming messages, and generates responses using measurement data.
+    Most of the messages just sending an ACK feedback except the RDTA, data message.
+*/
 void ProcessMessage(String msg, const Measurements& data)
 {
-  String header = msg.substring(0,5); 
-  if (header == "$RALL")
+  String header = msg.substring(0,5);
+  if (header == "$RDTA")
   {
-      gServerReady = true;
       gWatchdogCount = 0;
       String resp = "$ADTA,";
       resp.concat(data.ambientLight_lux);
       resp.concat(",");
-      resp.concat(data.loadCurrent_mA);
-      resp.concat(",");
-      resp.concat(data.chargeCurrent_mA);
+      resp.concat(data.current_mA);
       resp.concat(",");
       resp.concat(data.batteryVoltage_mV);
       resp.concat(",");
@@ -333,28 +346,35 @@ void ProcessMessage(String msg, const Measurements& data)
       resp.concat(data.lowerTankLevel_l + data.upperTankLevel_l);
       resp.concat("*");
       Serial.write(resp.c_str());
-      delay(100);
+  }
+  else if(header == "$RSTT")
+  {
       SendControlFeedback();
   }
   else if(header == "$RPMP")
   { 
       gControl.requestedPumpState = msg.substring(6, 7).toInt();
+      Serial.write("$APMP*");
   }
   else if(header == "$RVLV")
   { 
       gControl.requestedValveState = msg.substring(6, 7).toInt();
+      Serial.write("$AVLV*");
   }
   else if(header == "$RSLR")
   { 
       gControl.requestedSolarState = msg.substring(6, 7).toInt();
+      Serial.write("$ASLR*");
   }
   else if(header == "$RGNR")
   { 
       gControl.requestedGeneratorState = msg.substring(6, 7).toInt();
+      Serial.write("$AGNR*");
   }
   else if(header == "$RMNL")
   {
       gControl.isManual = msg.substring(6, 7).toInt();
+      Serial.write("$AMNL*");
   }
 }
 
@@ -416,33 +436,26 @@ bool isFluidDischarged(const Measurements& data)
 void setState(int relayId, int newState)
 {
     int *pCurrentState = nullptr;
-    int *pRequestedState = nullptr;
     switch(relayId)
     {
         case cPumpRelayId:
             pCurrentState = &gControl.pumpState;
-            pRequestedState = &gControl.requestedPumpState;
             break; 
         case cValveRelayId:
             pCurrentState = &gControl.valveState;
-            pRequestedState = &gControl.requestedValveState;
             break;
         case cSolarRelayId:
             pCurrentState = &gControl.solarState;
-            pRequestedState = &gControl.requestedSolarState;
             break;
         case cGeneratorRelayId:
             pCurrentState = &gControl.generatorState;
-            pRequestedState = &gControl.requestedGeneratorState;
             break;
         default:
             return;
     }
-  
     if (newState != *pCurrentState)
     {
         *pCurrentState = newState;
-        *pRequestedState = 0;
         digitalWrite(relayId, *pCurrentState);
     }
 }
@@ -454,29 +467,42 @@ void setState(int relayId, int newState)
  */
 void manualControl(const Measurements& data)
 {
-    if (gControl.requestedValveState)
-        setState(cValveRelayId, cRelayStateOn);
+    setState(cValveRelayId, gControl.requestedValveState);
+    if(gControl.requestedValveState)
+    {
+      gControl.requestedGeneratorState = 1;
+      gControl.requestedSolarState = 0;
+    }
 
     if (isPumped(data))
         setState(cPumpRelayId, cRelayStateOff);
     else
-        if(gControl.requestedValveState)
-            setState(cPumpRelayId, cRelayStateOn); 
+        setState(cPumpRelayId, gControl.requestedPumpState);
 
     if (gControl.requestedSolarState)
     {
-        setState(cGeneratorRelayId, cRelayStateOff);
+        gControl.requestedGeneratorState = 0;
+        setState(cGeneratorRelayId, gControl.requestedGeneratorState);
         // wait time makes sure the generator is off.
         delay(100);
         setState(cSolarRelayId, cRelayStateOn);
     }
+    else
+    {
+        setState(cSolarRelayId, cRelayStateOff);
+    }
 
     if (gControl.requestedGeneratorState)
     {
-        setState(cSolarRelayId, cRelayStateOff);
+        gControl.requestedSolarState = 0;
+        setState(cSolarRelayId, gControl.requestedSolarState);
         // wait time makes sure the solar is off.
         delay(100);
         setState(cGeneratorRelayId, cRelayStateOn);
+    }
+    else
+    {
+        setState(cGeneratorRelayId, cRelayStateOff);
     }
 
     if(isBatteryLow(data) && isFluidDischarged(data))
@@ -486,7 +512,7 @@ void manualControl(const Measurements& data)
     else if(!isBatteryLow(data) || !isFluidDischarged(data))
     {
         gControl.isLowVoltageShutdown = 0;
-    } 
+    }
 }
 
 /*! Runs automatic control
@@ -548,20 +574,18 @@ void autoControl(const Measurements& data)
 
 void loop() {
     Measurements data;
-    if (gServerReady)
-    {
-        data.ambientLight_lux = GetLightIntensity_lux();
-        data.loadCurrent_mA = GetAvgCurrent_mA(cLoadCurrentSensorId);
-        data.chargeCurrent_mA = GetAvgCurrent_mA(cChargeCurrentSensorId);
-        data.batteryVoltage_mV = GetBatteryVoltage_mV();
-        data.dropFlow_lpmin = GetFlow_lpmin(cDropFlowMeterId, cDropFlow_WavePerLiter);
-        data.upperTankLevel_l = GetTankLevel_l(cUpperTankWeightSensorId); 
-        data.lowerTankLevel_l = GetTankLevel_l(cLowerTankWeightSensorId);
-        //if (gControl.isManual == 0)
-        //    autoControl(data);
-        //else
-        //    manualControl(data);       
-    }
+    data.ambientLight_lux = GetLightIntensity_lux();
+    data.current_mA = GetAvgCurrent_mA(cCurrentSensorId);
+    data.batteryVoltage_mV = GetBatteryVoltage_mV();
+    if(gControl.generatorState)
+      data.dropFlow_lpmin = GetFlow_lpmin(cDropFlowMeterId, cDropFlow_WavePerLiter);
+    data.upperTankLevel_l = GetTankLevel_l(cUpperTankWeightSensorId); 
+    data.lowerTankLevel_l = GetTankLevel_l(cLowerTankWeightSensorId);
+    if (gControl.isManual == 0)
+        autoControl(data);
+    else
+        manualControl(data);
+           
     while(Serial.available() != 0)
     {
       String recvRaw = Serial.readString();
@@ -574,5 +598,5 @@ void loop() {
       }  
     }
     CheckWatchdog();
-    gSampleCounter++;
+    UpdateAverager();
 }

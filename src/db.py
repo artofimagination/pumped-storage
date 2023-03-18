@@ -40,6 +40,8 @@ class TimescaleDB():
                 print(error.pgerror)
 
     def insert_test_data(self, conn, cursor, _):
+        """! Inserts  test data in the database.
+        """
         for id in range(0, 2, 1):
             data = (id,)
             # create random data
@@ -77,6 +79,8 @@ class TimescaleDB():
         conn.commit()
 
     def execute(self, statement, data=None):
+        """! Connects to the database and executes the query. The connection is immediately closed afterwards.
+        """
         db_name = os.environ['TIMESCALE_DB_NAME']
         user = os.environ['TIMESCALE_DB_USER']
         passwd = os.environ['TIMESCALE_DB_PASSWORD']
